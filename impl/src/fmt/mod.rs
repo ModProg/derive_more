@@ -8,8 +8,7 @@ pub(crate) mod debug;
 pub(crate) mod display;
 mod parsing;
 
-use std::fmt::Display;
-
+#[cfg(feature = "display")]
 use convert_case::{Case, Casing as _};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
@@ -19,7 +18,7 @@ use syn::{
     parse_quote,
     punctuated::Punctuated,
     spanned::Spanned as _,
-    token, LitStr, Token,
+    token,
 };
 
 use crate::{
@@ -106,15 +105,18 @@ impl BoundsAttribute {
 /// - `SCREAMING_SNAKE_CASE`
 /// - `kebab-case`
 /// - `SCREAMING-KEBAB-CASE`
+#[cfg(feature = "display")]
 #[derive(Debug, Clone, Copy)]
-struct RenameAllAttribute(Case);
+struct RenameAllAttribute(#[allow(unused)] Case);
 
+#[cfg(feature = "display")]
 impl RenameAllAttribute {
     fn convert_case(&self, ident: &syn::Ident) -> String {
         ident.unraw().to_string().to_case(self.0)
     }
 }
 
+#[cfg(feature = "display")]
 impl Parse for RenameAllAttribute {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let _ = input.parse::<syn::Path>().and_then(|p| {
@@ -128,9 +130,9 @@ impl Parse for RenameAllAttribute {
             }
         })?;
 
-        input.parse::<Token![=]>()?;
+        input.parse::<syn::Token![=]>()?;
 
-        let value: LitStr = input.parse()?;
+        let value: syn::LitStr = input.parse()?;
 
         // TODO should we really do a case insensitive comparision here?
         Ok(Self(match value.value().replace(['-', '_'], "").to_lowercase().as_str() {
@@ -568,8 +570,8 @@ impl Placeholder {
 /// are allowed.
 ///
 /// [`fmt::Display`]: std::fmt::Display
-#[derive(Debug, Default)]
-struct ContainerAttributes {
+#[derive(Debug)]
+struct ContainerAttributes<T> {
     /// Interpolation [`FmtAttribute`].
     fmt: Option<FmtAttribute>,
 
@@ -577,11 +579,25 @@ struct ContainerAttributes {
     bounds: BoundsAttribute,
 
     /// Rename unit enum variants following a similar behavior as [`serde`](https://serde.rs/container-attrs.html#rename_all).
-    rename_all: Option<RenameAllAttribute>,
+    rename_all: Option<T>,
 }
 
-impl Spanning<ContainerAttributes> {
-    fn validate_for_struct(&self, attr_name: impl Display) -> syn::Result<()> {
+impl<T> std::default::Default for ContainerAttributes<T> {
+    fn default() -> Self {
+        Self {
+            fmt: None,
+            bounds: BoundsAttribute::default(),
+            rename_all: None,
+        }
+    }
+}
+
+#[cfg(feature = "display")]
+impl<T> Spanning<ContainerAttributes<T>> {
+    fn validate_for_struct(
+        &self,
+        attr_name: impl std::fmt::Display,
+    ) -> syn::Result<()> {
         if self.rename_all.is_some() {
             Err(syn::Error::new(
                 self.span,
@@ -593,21 +609,43 @@ impl Spanning<ContainerAttributes> {
     }
 }
 
-mod kw {
-    use syn::custom_keyword;
-
-    custom_keyword!(rename_all);
-    custom_keyword!(bounds);
-    custom_keyword!(bound);
-}
-
-impl Parse for ContainerAttributes {
+#[cfg(feature = "debug")]
+impl Parse for ContainerAttributes<std::convert::Infallible> {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         // We do check `FmtAttribute::check_legacy_fmt` eagerly here, because `Either` will swallow
         // any error of the `Either::Left` if the `Either::Right` succeeds.
         FmtAttribute::check_legacy_fmt(input)?;
+        <Either<FmtAttribute, BoundsAttribute>>::parse(input).map(|v| match v {
+            Either::Left(fmt) => Self {
+                bounds: BoundsAttribute::default(),
+                fmt: Some(fmt),
+                rename_all: None,
+            },
+            Either::Right(bounds) => Self {
+                bounds,
+                fmt: None,
+                rename_all: None,
+            },
+        })
+    }
+}
+
+#[cfg(feature = "display")]
+impl Parse for ContainerAttributes<RenameAllAttribute> {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        mod kw {
+            use syn::custom_keyword;
+
+            custom_keyword!(rename_all);
+            custom_keyword!(bounds);
+            custom_keyword!(bound);
+        }
+
+        // We do check `FmtAttribute::check_legacy_fmt` eagerly here, because `Either` will swallow
+        // any error of the `Either::Left` if the `Either::Right` succeeds.
+        FmtAttribute::check_legacy_fmt(input)?;
         let lookahead = input.lookahead1();
-        Ok(if lookahead.peek(LitStr) {
+        Ok(if lookahead.peek(syn::LitStr) {
             Self {
                 fmt: Some(input.parse()?),
                 bounds: BoundsAttribute::default(),
@@ -616,7 +654,7 @@ impl Parse for ContainerAttributes {
         } else if lookahead.peek(kw::rename_all)
             || lookahead.peek(kw::bounds)
             || lookahead.peek(kw::bound)
-            || lookahead.peek(Token![where])
+            || lookahead.peek(syn::Token![where])
         {
             let mut bounds = BoundsAttribute::default();
             let mut rename_all = None;
@@ -633,14 +671,14 @@ impl Parse for ContainerAttributes {
                     }
                 } else if lookahead.peek(kw::bounds)
                     || lookahead.peek(kw::bound)
-                    || lookahead.peek(Token![where])
+                    || lookahead.peek(syn::Token![where])
                 {
                     bounds.0.extend(input.parse::<BoundsAttribute>()?.0)
                 } else {
                     return Err(lookahead.error());
                 }
                 if !input.is_empty() {
-                    input.parse::<Token![,]>()?;
+                    input.parse::<syn::Token![,]>()?;
                 }
             }
             Self {
@@ -654,7 +692,10 @@ impl Parse for ContainerAttributes {
     }
 }
 
-impl attr::ParseMultiple for ContainerAttributes {
+impl<T: 'static> attr::ParseMultiple for ContainerAttributes<T>
+where
+    ContainerAttributes<T>: Parse,
+{
     fn merge_attrs(
         prev: Spanning<Self>,
         new: Spanning<Self>,

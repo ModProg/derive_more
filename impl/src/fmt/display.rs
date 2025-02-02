@@ -87,7 +87,7 @@ pub fn expand(input: &syn::DeriveInput, trait_name: &str) -> syn::Result<TokenSt
 ///
 /// [`syn::Ident`]: struct@syn::Ident
 type ExpansionCtx<'a> = (
-    &'a ContainerAttributes,
+    &'a ContainerAttributes<RenameAllAttribute>,
     &'a [&'a syn::Ident],
     &'a syn::Ident,
     &'a syn::Ident,
@@ -250,7 +250,7 @@ struct Expansion<'a> {
     rename_all: Option<RenameAllAttribute>,
 
     /// Derive macro [`ContainerAttributes`].
-    attrs: &'a ContainerAttributes,
+    attrs: &'a ContainerAttributes<RenameAllAttribute>,
 
     /// Struct or enum [`syn::Ident`].
     ///
